@@ -80,9 +80,12 @@ export class NoiseCore {
   _pink() {
     this._counter += 1;
     const counter = this._counter;
-    // _trailing_zeros(): 最下位ビットの位置
+    // _trailing_zeros(): 最下位ビットの位置。
+    // counter が 2^32 の倍数だと & が 32bit に丸められて 0 になり zeros = -1 になる。
+    // Python 版は 32 を返して弾かれる分岐なので、ここでも同様にスキップする
+    // （踏まないと rows[-1] が undefined で runningSum が NaN のまま戻らなくなる）。
     const zeros = 31 - Math.clz32(counter & -counter);
-    if (zeros < this._rows.length) {
+    if (zeros >= 0 && zeros < this._rows.length) {
       this._runningSum -= this._rows[zeros];
       this._rows[zeros] = this._uniform();
       this._runningSum += this._rows[zeros];

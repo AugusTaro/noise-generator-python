@@ -210,7 +210,7 @@
       let ctx = null;
       let worklet = null;
       let gainNode = null;
-      let limiter = null;
+      let shaper = null;
 
       const currentParams = () => ({
         kind,
@@ -299,9 +299,49 @@
         });
       }
 
+      // シードは生成の初期状態なので、再生中に変えるには生成器を作り直す必要がある
       els.seedEnabled.addEventListener('change', () => {
         els.seed.disabled = !els.seedEnabled.checked;
+        restartSource();
       });
+      els.seed.addEventListener('change', restartSource);
+
+      /**
+       * 閾値以下では完全に素通しし、それ以上だけを滑らかに丸めるカーブ。
+       * DynamicsCompressorNode は仕様上メイクアップゲインが常時かかり、
+       * gain = amplitude / peak の正規化を崩してしまうため使わない。
+       */
+      function softClipCurve(threshold = 0.95, points = 8193) {
+        const curve = new Float32Array(points);
+        for (let i = 0; i < points; i += 1) {
+          const x = (i / (points - 1)) * 2 - 1;
+          const magnitude = Math.abs(x);
+          const shaped =
+            magnitude <= threshold
+              ? magnitude
+              : threshold + (1 - threshold) * Math.tanh((magnitude - threshold) / (1 - threshold));
+          curve[i] = Math.sign(x) * shaped;
+        }
+        return curve;
+      }
+
+      /** worklet ノードを作って gainNode に繋ぐ。生成状態のリセットを兼ねる。 */
+      function buildSource() {
+        const params = currentParams();
+        worklet = new AudioWorkletNode(ctx, 'noise-processor', {
+          numberOfInputs: 0,
+          outputChannelCount: [1],
+          processorOptions: { ...params, seed: currentSeed() },
+        });
+        worklet.connect(gainNode);
+      }
+
+      /** 再生中のみ、生成器を作り直して新しいシードを反映する。 */
+      function restartSource() {
+        if (!worklet) return;
+        worklet.disconnect();
+        buildSource();
+      }
 
       async function createContext() {
         // noise_engine.py に合わせて 44.1kHz を要求する。拒否されたら既定値で動かす。
@@ -319,34 +359,37 @@
           await ctx.audioWorklet.addModule('./noise-processor.js');
           await ctx.resume();
 
-          const params = currentParams();
-          worklet = new AudioWorkletNode(ctx, 'noise-processor', {
-            numberOfInputs: 0,
-            outputChannelCount: [1],
-            processorOptions: { ...params, seed: currentSeed() },
+          gainNode = new GainNode(ctx, {
+            gain: normalizedGain(currentParams(), Number(inputs.amplitude.value)),
           });
-          gainNode = new GainNode(ctx, { gain: normalizedGain(params, Number(inputs.amplitude.value)) });
-          // 正規化はピーク推定なので、想定外のピークを受け止める保険
-          limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+          // 正規化はピーク推定なので、推定を超えたぶんを受け止める保険
+          shaper = new WaveShaperNode(ctx, { curve: softClipCurve(), oversample: '2x' });
 
-          worklet.connect(gainNode).connect(limiter).connect(ctx.destination);
+          buildSource();
+          gainNode.connect(shaper).connect(ctx.destination);
           els.stop.disabled = false;
         } catch (error) {
+          // ここで ctx を閉じないと、失敗のたびに AudioContext が積み上がる
+          await teardown();
           els.play.disabled = false;
-          showError(
-            `オーディオを開始できませんでした: ${error.message}` +
-              '（AudioWorklet はセキュアコンテキストが必要です。file:// で直接開かず、http://localhost 経由で表示してください）'
-          );
+          const hint = window.isSecureContext
+            ? ''
+            : '（AudioWorklet はセキュアコンテキストが必要です。file:// で直接開かず、http://localhost 経由で表示してください）';
+          showError(`オーディオを開始できませんでした: ${error.message}${hint}`);
         }
+      }
+
+      async function teardown() {
+        if (worklet) worklet.disconnect();
+        if (gainNode) gainNode.disconnect();
+        if (shaper) shaper.disconnect();
+        if (ctx) await ctx.close();
+        worklet = gainNode = shaper = ctx = null;
       }
 
       async function stop() {
         els.stop.disabled = true;
-        if (worklet) worklet.disconnect();
-        if (gainNode) gainNode.disconnect();
-        if (limiter) limiter.disconnect();
-        if (ctx) await ctx.close();
-        worklet = gainNode = limiter = ctx = null;
+        await teardown();
         els.play.disabled = false;
       }
 
@@ -411,17 +454,22 @@
           const scale = amplitude / (peak || 1);
           for (let i = 0; i < samples.length; i += 1) samples[i] *= scale;
 
+          // YYYYMMDD_HHMMSS。ミリ秒の区切りを拾わないよう 14 文字で切る
           const stamp = new Date()
             .toISOString()
             .replace(/[-:T]/g, '')
-            .slice(0, 15)
+            .slice(0, 14)
             .replace(/(\d{8})(\d{6})/, '$1_$2');
           const url = URL.createObjectURL(encodeWav(samples, SAMPLE_RATE));
           const anchor = document.createElement('a');
           anchor.href = url;
           anchor.download = `${kind}_${duration}s_${stamp}.wav`;
+          // Safari は DOM に入っていないと click() でダウンロードが始まらない
+          document.body.append(anchor);
           anchor.click();
-          URL.revokeObjectURL(url);
+          anchor.remove();
+          // ダウンロード開始前に revoke すると失敗しうるので、少し待ってから解放する
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
           els.exportStatus.textContent = `${anchor.download} を書き出しました。`;
         } catch (error) {
           els.exportStatus.textContent = `書き出しに失敗しました: ${error.message}`;

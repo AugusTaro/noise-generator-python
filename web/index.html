@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noise Generator</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1a1a1a;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --accent: #2563eb;
+        --surface: #f9fafb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14161a;
+          --fg: #e8eaed;
+          --muted: #9aa0a6;
+          --line: #2c3036;
+          --accent: #60a5fa;
+          --surface: #1b1e23;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 2rem 1rem 4rem;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+        line-height: 1.6;
+      }
+      main { max-width: 720px; margin: 0 auto; }
+      h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+      .lead { color: var(--muted); font-size: 0.875rem; margin: 0 0 1.5rem; }
+      .presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+      .presets button {
+        padding: 0.6rem 0.4rem;
+        border: 1px solid var(--line);
+        border-radius: 0.5rem;
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-size: 0.8125rem;
+        cursor: pointer;
+      }
+      .presets button[aria-pressed="true"] {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        font-weight: 600;
+      }
+      hr { border: none; border-top: 1px solid var(--line); margin: 1.5rem 0; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.25rem 1.5rem; }
+      @media (max-width: 560px) { .grid, .presets { grid-template-columns: repeat(2, 1fr); } }
+      .field { padding: 0.4rem 0; }
+      .field label {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+      .field output { font-variant-numeric: tabular-nums; color: var(--fg); }
+      input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0.25rem 0 0; }
+      .transport { display: flex; gap: 0.75rem; margin-top: 1rem; }
+      .transport button, .export button {
+        flex: 1;
+        padding: 0.7rem 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .transport button.primary, .export button {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .note { font-size: 0.8125rem; color: var(--muted); margin: 0.75rem 0 0; }
+      .seed { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; font-size: 0.875rem; }
+      .seed input[type="number"] { width: 8rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 0.375rem; background: var(--bg); color: var(--fg); font: inherit; }
+      h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+      #error { display: none; padding: 0.75rem 1rem; border-radius: 0.5rem; background: #fee2e2; color: #991b1b; margin-bottom: 1rem; font-size: 0.875rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Noise Generator</h1>
+      <p class="lead">
+        リアルタイム生成なので繰り返しがなく、ループの継ぎ目も鳴りません。再生したまま各パラメータを変更できます。
+      </p>
+
+      <div id="error" role="alert"></div>
+
+      <div class="presets" id="presets"></div>
+
+      <hr />
+
+      <div class="grid">
+        <div class="field">
+          <label for="amplitude">Volume <output id="amplitude-out"></output></label>
+          <input type="range" id="amplitude" min="0.05" max="1" step="0.01" />
+        </div>
+        <div class="field">
+          <label for="step">Random movement <output id="step-out"></output></label>
+          <input type="range" id="step" min="0.05" max="1.5" step="0.01" />
+        </div>
+        <div class="field">
+          <label for="bass">Bass weight <output id="bass-out"></output></label>
+          <input type="range" id="bass" min="0" max="1.5" step="0.01" />
+        </div>
+        <div class="field">
+          <label for="damping">Brown persistence <output id="damping-out"></output></label>
+          <input type="range" id="damping" min="0" max="0.9999" step="0.0001" />
+        </div>
+        <div class="field">
+          <label for="smooth">Smoothness <output id="smooth-out"></output></label>
+          <input type="range" id="smooth" min="0.001" max="1" step="0.001" />
+        </div>
+      </div>
+
+      <p class="note" id="kind-note"></p>
+
+      <div class="seed">
+        <label><input type="checkbox" id="seed-enabled" /> シードを固定</label>
+        <input type="number" id="seed" min="0" max="999999" value="12345" disabled />
+      </div>
+      <p class="note">
+        シードは再現用です。Python 版とは擬似乱数のアルゴリズムが異なるため、同じシードでも同一の波形にはなりません。
+      </p>
+
+      <div class="transport">
+        <button id="play" class="primary">再生</button>
+        <button id="stop" disabled>停止</button>
+      </div>
+
+      <hr />
+
+      <section class="export">
+        <h2>書き出し</h2>
+        <div class="field">
+          <label for="duration">長さ <output id="duration-out"></output></label>
+          <input type="range" id="duration" min="1" max="300" step="1" />
+        </div>
+        <button id="download">WAV をダウンロード</button>
+        <p class="note" id="export-status">
+          ブラウザ内で生成するためサーバーは不要です。書き出しは Python 版と同じピーク正規化を行います。
+        </p>
+      </section>
+    </main>
+
+    <script type="module">
+      import { NoiseCore, SAMPLE_RATE } from './noise-processor.js';
+
+      /**
+       * noise_engine.py の PRESETS の写し（あちらが正本）。
+       * ビルドなし構成を優先して二重管理にしている。
+       */
+      const PRESETS = {
+        brown_deep: { label: 'Brown - deep', duration: 60, amplitude: 0.85, step: 0.35, damping: 0.999, smooth: 0.04, bass: 1.12 },
+        brown_soft: { label: 'Brown - soft', duration: 60, amplitude: 0.8, step: 0.28, damping: 0.9985, smooth: 0.06, bass: 1.04 },
+        pink: { label: 'Pink', duration: 60, amplitude: 0.7, step: 0.55, damping: 0.997, smooth: 0.16, bass: 0.58 },
+        white: { label: 'White', duration: 60, amplitude: 0.45, step: 1.0, damping: 0.0, smooth: 1.0, bass: 0.0 },
+      };
+
+      const NOTES = {
+        white: 'ホワイトノイズは Volume と長さのみ使用します。音色スライダーはプリセット切り替えで一緒に動くよう表示したままにしています。',
+        pink: 'ピンクノイズはホワイトとブラウンの中間で、高域が穏やかです。',
+        brown_deep: '既定は最も深いブラウン設定です。',
+        brown_soft: 'brown_deep より穏やかなブラウン設定です。',
+      };
+
+      /**
+       * 音量の正規化について。
+       *
+       * noise_engine.py の _normalize() は全サンプル生成後にピークで割るが、
+       * 無限ストリーミングでは全体のピークが事前に分からない。そこで:
+       *   - 再生時   : 同じ生成コードを PROBE_SECONDS 秒ぶんだけ回してピークを実測し、
+       *                gain = amplitude / peak を GainNode に与える（パラメータ変更に追従する）
+       *   - 書き出し時: 全バッファが手に入るので Python と同一のピーク正規化を行う
+       * 測定は固定シードなので、同じパラメータなら常に同じゲインになる。
+       */
+      const PROBE_SECONDS = 3;
+      const PROBE_SEED = 987654321;
+
+      const els = {
+        error: document.getElementById('error'),
+        presets: document.getElementById('presets'),
+        kindNote: document.getElementById('kind-note'),
+        play: document.getElementById('play'),
+        stop: document.getElementById('stop'),
+        download: document.getElementById('download'),
+        exportStatus: document.getElementById('export-status'),
+        seedEnabled: document.getElementById('seed-enabled'),
+        seed: document.getElementById('seed'),
+      };
+      const SLIDERS = ['amplitude', 'step', 'bass', 'damping', 'smooth', 'duration'];
+      const inputs = Object.fromEntries(SLIDERS.map((id) => [id, document.getElementById(id)]));
+      const outputs = Object.fromEntries(SLIDERS.map((id) => [id, document.getElementById(`${id}-out`)]));
+
+      let kind = 'brown_deep';
+      let ctx = null;
+      let worklet = null;
+      let gainNode = null;
+      let limiter = null;
+
+      const currentParams = () => ({
+        kind,
+        step: Number(inputs.step.value),
+        damping: Number(inputs.damping.value),
+        smooth: Number(inputs.smooth.value),
+        bass: Number(inputs.bass.value),
+      });
+
+      const currentSeed = () =>
+        els.seedEnabled.checked ? Number(els.seed.value) : undefined;
+
+      /** 現在のパラメータで実際に生成し、ピーク値を測る。 */
+      function measurePeak(params) {
+        const core = new NoiseCore({ ...params, seed: PROBE_SEED });
+        let peak = 0;
+        const total = PROBE_SECONDS * SAMPLE_RATE;
+        for (let i = 0; i < total; i += 1) {
+          const value = Math.abs(core.next());
+          if (value > peak) peak = value;
+        }
+        return peak || 1;
+      }
+
+      function normalizedGain(params, amplitude) {
+        return amplitude / measurePeak(params);
+      }
+
+      function showError(message) {
+        els.error.textContent = message;
+        els.error.style.display = 'block';
+      }
+
+      function formatValue(id, value) {
+        if (id === 'duration') return `${value} sec`;
+        if (id === 'damping') return Number(value).toFixed(4);
+        if (id === 'smooth') return Number(value).toFixed(3);
+        return Number(value).toFixed(2);
+      }
+
+      function syncOutputs() {
+        for (const id of SLIDERS) outputs[id].textContent = formatValue(id, inputs[id].value);
+      }
+
+      function applyPreset(name) {
+        kind = name;
+        const preset = PRESETS[name];
+        inputs.amplitude.value = preset.amplitude;
+        inputs.step.value = preset.step;
+        inputs.damping.value = preset.damping;
+        inputs.smooth.value = preset.smooth;
+        inputs.bass.value = preset.bass;
+        inputs.duration.value = preset.duration;
+        syncOutputs();
+        els.kindNote.textContent = NOTES[name];
+        for (const button of els.presets.children) {
+          button.setAttribute('aria-pressed', String(button.dataset.kind === name));
+        }
+        pushParams();
+      }
+
+      /** 再生中なら worklet にパラメータを送り、ゲインを測り直す。 */
+      function pushParams() {
+        if (!worklet) return;
+        const params = currentParams();
+        worklet.port.postMessage(params);
+        const gain = normalizedGain(params, Number(inputs.amplitude.value));
+        // 段差を作らないよう滑らかに追従させる
+        gainNode.gain.setTargetAtTime(gain, ctx.currentTime, 0.03);
+      }
+
+      for (const [name, preset] of Object.entries(PRESETS)) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = preset.label;
+        button.dataset.kind = name;
+        button.setAttribute('aria-pressed', 'false');
+        button.addEventListener('click', () => applyPreset(name));
+        els.presets.append(button);
+      }
+
+      for (const id of SLIDERS) {
+        inputs[id].addEventListener('input', () => {
+          outputs[id].textContent = formatValue(id, inputs[id].value);
+          if (id !== 'duration') pushParams();
+        });
+      }
+
+      els.seedEnabled.addEventListener('change', () => {
+        els.seed.disabled = !els.seedEnabled.checked;
+      });
+
+      async function createContext() {
+        // noise_engine.py に合わせて 44.1kHz を要求する。拒否されたら既定値で動かす。
+        try {
+          return new AudioContext({ sampleRate: SAMPLE_RATE });
+        } catch {
+          return new AudioContext();
+        }
+      }
+
+      async function play() {
+        els.play.disabled = true;
+        try {
+          ctx = await createContext();
+          await ctx.audioWorklet.addModule('./noise-processor.js');
+          await ctx.resume();
+
+          const params = currentParams();
+          worklet = new AudioWorkletNode(ctx, 'noise-processor', {
+            numberOfInputs: 0,
+            outputChannelCount: [1],
+            processorOptions: { ...params, seed: currentSeed() },
+          });
+          gainNode = new GainNode(ctx, { gain: normalizedGain(params, Number(inputs.amplitude.value)) });
+          // 正規化はピーク推定なので、想定外のピークを受け止める保険
+          limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+
+          worklet.connect(gainNode).connect(limiter).connect(ctx.destination);
+          els.stop.disabled = false;
+        } catch (error) {
+          els.play.disabled = false;
+          showError(
+            `オーディオを開始できませんでした: ${error.message}` +
+              '（AudioWorklet はセキュアコンテキストが必要です。file:// で直接開かず、http://localhost 経由で表示してください）'
+          );
+        }
+      }
+
+      async function stop() {
+        els.stop.disabled = true;
+        if (worklet) worklet.disconnect();
+        if (gainNode) gainNode.disconnect();
+        if (limiter) limiter.disconnect();
+        if (ctx) await ctx.close();
+        worklet = gainNode = limiter = ctx = null;
+        els.play.disabled = false;
+      }
+
+      els.play.addEventListener('click', play);
+      els.stop.addEventListener('click', stop);
+
+      /** Float32 のモノラルサンプルを 16bit PCM の WAV にする（noise_engine.py の write_wav 相当）。 */
+      function encodeWav(samples, sampleRate) {
+        const buffer = new ArrayBuffer(44 + samples.length * 2);
+        const view = new DataView(buffer);
+        const writeText = (offset, text) => {
+          for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+        };
+        writeText(0, 'RIFF');
+        view.setUint32(4, 36 + samples.length * 2, true);
+        writeText(8, 'WAVE');
+        writeText(12, 'fmt ');
+        view.setUint32(16, 16, true); // fmt チャンクサイズ
+        view.setUint16(20, 1, true); // PCM
+        view.setUint16(22, 1, true); // モノラル
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true); // バイト/秒
+        view.setUint16(32, 2, true); // ブロックアライン
+        view.setUint16(34, 16, true); // ビット深度
+        writeText(36, 'data');
+        view.setUint32(40, samples.length * 2, true);
+        for (let i = 0; i < samples.length; i += 1) {
+          const clipped = Math.max(-1, Math.min(1, samples[i]));
+          view.setInt16(44 + i * 2, Math.round(clipped * 32767), true);
+        }
+        return new Blob([buffer], { type: 'audio/wav' });
+      }
+
+      async function download() {
+        const duration = Number(inputs.duration.value);
+        const amplitude = Number(inputs.amplitude.value);
+        const params = currentParams();
+
+        els.download.disabled = true;
+        els.exportStatus.textContent = `${duration} 秒ぶんを生成中…`;
+        try {
+          const offline = new OfflineAudioContext(1, SAMPLE_RATE * duration, SAMPLE_RATE);
+          await offline.audioWorklet.addModule('./noise-processor.js');
+          const node = new AudioWorkletNode(offline, 'noise-processor', {
+            numberOfInputs: 0,
+            outputChannelCount: [1],
+            processorOptions: { ...params, seed: currentSeed() },
+          });
+          // 生値は 1 を大きく超えうるので、推定ピークで割ってから書き出す
+          const preScale = new GainNode(offline, { gain: 1 / measurePeak(params) });
+          node.connect(preScale).connect(offline.destination);
+
+          const rendered = await offline.startRendering();
+          const samples = rendered.getChannelData(0);
+
+          // ここは noise_engine.py の _normalize() と同じ: 実ピークで割って amplitude を掛ける
+          let peak = 0;
+          for (let i = 0; i < samples.length; i += 1) {
+            const value = Math.abs(samples[i]);
+            if (value > peak) peak = value;
+          }
+          const scale = amplitude / (peak || 1);
+          for (let i = 0; i < samples.length; i += 1) samples[i] *= scale;
+
+          const stamp = new Date()
+            .toISOString()
+            .replace(/[-:T]/g, '')
+            .slice(0, 15)
+            .replace(/(\d{8})(\d{6})/, '$1_$2');
+          const url = URL.createObjectURL(encodeWav(samples, SAMPLE_RATE));
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${kind}_${duration}s_${stamp}.wav`;
+          anchor.click();
+          URL.revokeObjectURL(url);
+          els.exportStatus.textContent = `${anchor.download} を書き出しました。`;
+        } catch (error) {
+          els.exportStatus.textContent = `書き出しに失敗しました: ${error.message}`;
+        } finally {
+          els.download.disabled = false;
+        }
+      }
+
+      els.download.addEventListener('click', download);
+
+      if (!window.AudioWorkletNode || !window.isSecureContext) {
+        showError(
+          'このブラウザ／表示方法では AudioWorklet を利用できません。file:// で直接開いている場合は、http://localhost 経由で表示してください。'
+        );
+      }
+
+      applyPreset('brown_deep');
+    </script>
+  </body>
+</html>
